@@ -268,5 +268,16 @@ def main():
     app.add_handler(CallbackQueryHandler(on_download, pattern='^dl_'))
     app.add_error_handler(error_handler)
 
+    print("Бот запущен...", flush=True)
     logger.info("Бот запущен...")
     app.run_polling(drop_pending_updates=True)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as e:
+        print(f"FATAL ERROR: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise
