@@ -14,6 +14,7 @@ from telegram.ext import (
     ContextTypes,
 )
 from scraper import search_music, download_track
+from database import init_db, log_search, get_stats
 
 load_dotenv()
 logging.basicConfig(
@@ -23,6 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 WAITING_QUERY = 1
+ADMIN_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "0"))
 
 
 async def _retry(coro_fn, retries=3, delay=2):
@@ -70,6 +72,15 @@ async def on_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка поиска: {e}")
         await _retry(lambda: msg.edit_text("❌ Ошибка при поиске. Попробуйте позже."))
         return ConversationHandler.END
+
+    user = update.effective_user
+    await log_search(
+        user_id=user.id,
+        username=user.username,
+        full_name=user.full_name,
+        query=user_query,
+        results_count=len(results),
+    )
 
     if not results:
         await _retry(lambda: msg.edit_text(
@@ -152,6 +163,56 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if ADMIN_ID == 0:
+        await update.message.reply_text(
+            f"⚠️ ADMIN_TELEGRAM_ID не задан.\n\n"
+            f"Твой Telegram ID: <code>{user.id}</code>\n\n"
+            f"Добавь в Railway переменную:\n"
+            f"<code>ADMIN_TELEGRAM_ID = {user.id}</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Нет доступа.")
+        return
+
+    stats = await get_stats()
+
+    lines = [
+        f"👥 <b>Пользователей:</b> {stats['total_users']}",
+        f"🔎 <b>Всего запросов:</b> {stats['total_searches']}",
+        "",
+        "🏆 <b>Топ пользователей:</b>",
+    ]
+    for u in stats["top_users"]:
+        name = u["full_name"] or u["username"] or f"id{u['user_id']}"
+        tag = f"@{u['username']}" if u["username"] else f"<code>{u['user_id']}</code>"
+        lines.append(f"  • {name} ({tag}) — {u['cnt']} запросов")
+
+    lines += ["", "📋 <b>Последние 30 запросов:</b>"]
+    for r in stats["recent"]:
+        name = r["full_name"] or r["username"] or f"id{r['user_id']}"
+        found = f"найдено {r['results_count']}" if r["results_count"] else "не найдено"
+        dt = r["created_at"][:16].replace("T", " ")
+        lines.append(f"  [{dt}] <b>{name}</b>: {r['query']} ({found})")
+
+    text = "\n".join(lines)
+
+    # Telegram лимит — 4096 символов
+    if len(text) > 4000:
+        text = text[:4000] + "\n\n…(обрезано)"
+
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    await update.message.reply_text(f"Твой Telegram ID: <code>{user.id}</code>", parse_mode="HTML")
+
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Необработанная ошибка: {context.error}", exc_info=context.error)
     if isinstance(update, Update):
@@ -171,6 +232,9 @@ def main():
     if not token:
         raise ValueError("Не задан TELEGRAM_BOT_TOKEN в файле .env")
 
+    async def _post_init(application):
+        await init_db()
+
     app = (
         Application.builder()
         .token(token)
@@ -178,6 +242,7 @@ def main():
         .read_timeout(30)
         .write_timeout(60)
         .pool_timeout(30)
+        .post_init(_post_init)
         .build()
     )
 
@@ -197,13 +262,11 @@ def main():
 
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('search', on_search_again))
+    app.add_handler(CommandHandler('admin', admin))
+    app.add_handler(CommandHandler('myid', myid))
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(on_download, pattern='^dl_'))
     app.add_error_handler(error_handler)
 
     logger.info("Бот запущен...")
     app.run_polling(drop_pending_updates=True)
-
-
-if __name__ == '__main__':
-    main()
