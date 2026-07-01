@@ -3,7 +3,7 @@ import os
 import tempfile
 import yt_dlp
 
-MAX_DURATION = 600  # 10 минут — отсекаем подкасты и длинные видео
+MAX_DURATION = 600  # 10 минут
 
 
 def _search_sync(query: str, max_results: int = 8) -> list[dict]:
@@ -13,24 +13,24 @@ def _search_sync(query: str, max_results: int = 8) -> list[dict]:
         'extract_flat': True,
         'skip_download': True,
     }
-    url = f"ytsearch{max_results}:{query}"
+    url = f"scsearch{max_results}:{query}"
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
         tracks = []
         for entry in (info.get('entries') or []):
             duration = entry.get('duration') or 0
-            if duration > MAX_DURATION:
+            if duration and duration > MAX_DURATION:
                 continue
             title = entry.get('title', 'Unknown')
             uploader = entry.get('uploader') or entry.get('channel') or 'Unknown'
-            video_id = entry.get('id', '')
-            if not video_id:
+            track_url = entry.get('url') or entry.get('webpage_url', '')
+            if not track_url:
                 continue
             tracks.append({
                 'title': title,
                 'artist': uploader,
                 'duration': duration,
-                'download_url': f"https://www.youtube.com/watch?v={video_id}",
+                'download_url': track_url,
             })
         return tracks
 
@@ -49,16 +49,8 @@ def _download_sync(url: str) -> str | None:
             'preferredcodec': 'mp3',
             'preferredquality': '192',
         }],
-        # Android-клиент обходит блокировки облачных IP
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'web'],
-            }
-        },
-        'geo_bypass': True,
         'socket_timeout': 60,
         'retries': 3,
-        'fragment_retries': 3,
     }
 
     try:
@@ -70,14 +62,12 @@ def _download_sync(url: str) -> str | None:
                 size = os.path.getsize(mp3_path)
                 print(f"[SCRAPER] Скачано {size // 1024} KB -> {mp3_path}", flush=True)
                 return mp3_path
-            # ffmpeg мог создать файл с другим именем — ищем в tmp_dir
             for f in os.listdir(tmp_dir):
                 if f.endswith('.mp3'):
                     found = os.path.join(tmp_dir, f)
-                    size = os.path.getsize(found)
-                    print(f"[SCRAPER] Найден альтернативный файл {size // 1024} KB -> {found}", flush=True)
+                    print(f"[SCRAPER] Найден файл {os.path.getsize(found) // 1024} KB -> {found}", flush=True)
                     return found
-            print(f"[SCRAPER] MP3 файл не найден в {tmp_dir}, содержимое: {os.listdir(tmp_dir)}", flush=True)
+            print(f"[SCRAPER] MP3 не найден, содержимое tmp: {os.listdir(tmp_dir)}", flush=True)
             return None
     except Exception as e:
         print(f"[SCRAPER] Ошибка загрузки ({type(e).__name__}): {e}", flush=True)
