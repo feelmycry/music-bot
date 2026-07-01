@@ -39,16 +39,12 @@ def _download_sync(url: str) -> str | None:
     tmp_dir = tempfile.mkdtemp()
     output_tmpl = os.path.join(tmp_dir, '%(title)s.%(ext)s')
 
+    # SoundCloud отдаёт MP3 напрямую — ffmpeg не нужен
     ydl_opts = {
-        'format': 'bestaudio/best',
+        'format': 'bestaudio[ext=mp3]/bestaudio/best',
         'outtmpl': output_tmpl,
         'quiet': True,
         'no_warnings': True,
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
         'socket_timeout': 60,
         'retries': 3,
     }
@@ -57,17 +53,18 @@ def _download_sync(url: str) -> str | None:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
-            mp3_path = os.path.splitext(filename)[0] + '.mp3'
-            if os.path.exists(mp3_path):
-                size = os.path.getsize(mp3_path)
-                print(f"[SCRAPER] Скачано {size // 1024} KB -> {mp3_path}", flush=True)
-                return mp3_path
+            if os.path.exists(filename):
+                size = os.path.getsize(filename)
+                print(f"[SCRAPER] Скачано {size // 1024} KB -> {filename}", flush=True)
+                return filename
+            # Ищем любой аудиофайл в tmp_dir
+            audio_exts = ('.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac')
             for f in os.listdir(tmp_dir):
-                if f.endswith('.mp3'):
+                if any(f.endswith(ext) for ext in audio_exts):
                     found = os.path.join(tmp_dir, f)
                     print(f"[SCRAPER] Найден файл {os.path.getsize(found) // 1024} KB -> {found}", flush=True)
                     return found
-            print(f"[SCRAPER] MP3 не найден, содержимое tmp: {os.listdir(tmp_dir)}", flush=True)
+            print(f"[SCRAPER] Файл не найден, содержимое tmp: {os.listdir(tmp_dir)}", flush=True)
             return None
     except Exception as e:
         print(f"[SCRAPER] Ошибка загрузки ({type(e).__name__}): {e}", flush=True)
