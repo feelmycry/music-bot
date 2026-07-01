@@ -139,7 +139,8 @@ async def on_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 audio=audio,
                 title=title,
                 performer=artist,
-                caption=f"🎵 {artist} — {title}",
+                caption=f"🎵 {artist} — {title}\n\nСпизжено с бота <a href=\"https://t.me/my_realmusic_bot\">Мой музон</a>",
+                parse_mode="HTML",
             ))
         await msg.delete()
     except Exception as e:
