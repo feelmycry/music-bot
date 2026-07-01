@@ -14,7 +14,7 @@ from telegram.ext import (
     ContextTypes,
 )
 from scraper import search_music, download_track
-from database import init_db, log_search, get_stats
+from database import init_db, log_search, get_stats, get_user_searches
 
 load_dotenv()
 logging.basicConfig(
@@ -164,20 +164,25 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+def _check_admin(user) -> str | None:
+    """Возвращает текст ошибки или None если доступ разрешён."""
     if ADMIN_ID == 0:
-        await update.message.reply_text(
+        return (
             f"⚠️ ADMIN_TELEGRAM_ID не задан.\n\n"
             f"Твой Telegram ID: <code>{user.id}</code>\n\n"
             f"Добавь в Railway переменную:\n"
-            f"<code>ADMIN_TELEGRAM_ID = {user.id}</code>",
-            parse_mode="HTML",
+            f"<code>ADMIN_TELEGRAM_ID = {user.id}</code>"
         )
-        return
-
     if user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Нет доступа.")
+        return "⛔ Нет доступа."
+    return None
+
+
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    err = _check_admin(user)
+    if err:
+        await update.message.reply_text(err, parse_mode="HTML")
         return
 
     stats = await get_stats()
@@ -186,27 +191,96 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👥 <b>Пользователей:</b> {stats['total_users']}",
         f"🔎 <b>Всего запросов:</b> {stats['total_searches']}",
         "",
-        "🏆 <b>Топ пользователей:</b>",
+        "👤 <b>Нажми на пользователя чтобы увидеть его запросы:</b>",
     ]
-    for u in stats["top_users"]:
+    keyboard = []
+    for u in stats["users"]:
         name = u["full_name"] or u["username"] or f"id{u['user_id']}"
-        tag = f"@{u['username']}" if u["username"] else f"<code>{u['user_id']}</code>"
-        lines.append(f"  • {name} ({tag}) — {u['cnt']} запросов")
-
-    lines += ["", "📋 <b>Последние 30 запросов:</b>"]
-    for r in stats["recent"]:
-        name = r["full_name"] or r["username"] or f"id{r['user_id']}"
-        found = f"найдено {r['results_count']}" if r["results_count"] else "не найдено"
-        dt = r["created_at"][:16].replace("T", " ")
-        lines.append(f"  [{dt}] <b>{name}</b>: {r['query']} ({found})")
+        label = f"{name} — {u['cnt']} запр."
+        if len(label) > 60:
+            label = label[:57] + "..."
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"adm_{u['user_id']}")])
 
     text = "\n".join(lines)
+    await update.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
+    )
 
-    # Telegram лимит — 4096 символов
+
+async def on_admin_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    user = update.effective_user
+    err = _check_admin(user)
+    if err:
+        await query.message.reply_text(err, parse_mode="HTML")
+        return
+
+    target_id = int(query.data.split('_')[1])
+    data = await get_user_searches(target_id)
+
+    if not data:
+        await query.message.reply_text("Пользователь не найден.")
+        return
+
+    name = data["full_name"] or data["username"] or f"id{target_id}"
+    tag = f"@{data['username']}" if data["username"] else "—"
+
+    lines = [
+        f"👤 <b>{name}</b>",
+        f"🆔 ID: <code>{target_id}</code>",
+        f"📱 Username: {tag}",
+        f"🔎 Запросов: {len(data['searches'])}",
+        "",
+        "<b>Все запросы:</b>",
+    ]
+    for s in data["searches"]:
+        dt = s["created_at"][:16].replace("T", " ")
+        found = f"✅{s['results_count']}" if s["results_count"] else "❌0"
+        lines.append(f"  [{dt}] {s['query']} ({found})")
+
+    text = "\n".join(lines)
     if len(text) > 4000:
         text = text[:4000] + "\n\n…(обрезано)"
 
-    await update.message.reply_text(text, parse_mode="HTML")
+    keyboard = [[InlineKeyboardButton("← Назад", callback_data="adm_back")]]
+    await query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def on_admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    user = update.effective_user
+    err = _check_admin(user)
+    if err:
+        await query.message.reply_text(err, parse_mode="HTML")
+        return
+
+    stats = await get_stats()
+    lines = [
+        f"👥 <b>Пользователей:</b> {stats['total_users']}",
+        f"🔎 <b>Всего запросов:</b> {stats['total_searches']}",
+        "",
+        "👤 <b>Нажми на пользователя чтобы увидеть его запросы:</b>",
+    ]
+    keyboard = []
+    for u in stats["users"]:
+        name = u["full_name"] or u["username"] or f"id{u['user_id']}"
+        label = f"{name} — {u['cnt']} запр."
+        if len(label) > 60:
+            label = label[:57] + "..."
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"adm_{u['user_id']}")])
+
+    text = "\n".join(lines)
+    await query.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
+    )
 
 
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -267,6 +341,8 @@ def main():
     app.add_handler(CommandHandler('myid', myid))
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(on_download, pattern='^dl_'))
+    app.add_handler(CallbackQueryHandler(on_admin_back, pattern='^adm_back$'))
+    app.add_handler(CallbackQueryHandler(on_admin_user, pattern='^adm_\\d+$'))
     app.add_error_handler(error_handler)
 
     print("Бот запущен...", flush=True)
